@@ -1,0 +1,6 @@
+{
+  "name": "progress-panel",
+  "version": "0.1.0",
+  "description": "今の作業の進捗と、次に自分がやることを横のパネルに表示する",
+  "types": "./types/index.d.ts"
+}

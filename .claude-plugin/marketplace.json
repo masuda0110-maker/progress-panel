@@ -1,0 +1,5 @@
+{
+  "name": "progress-panel",
+  "owner": { "name": "masuda0110-maker" },
+  "plugins": [{ "name": "progress-panel", "source": "./" }]
+}
