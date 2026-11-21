@@ -15,6 +15,8 @@ export type Progress = {
 /** 共有フォルダに書き出す、チャット1つ分の要約 */
 export type SessionSummary = {
   id: string
+  /** サイドバーに出ているチャット名（取れないときは空） */
+  chatName: string
   project: string
   title: string
   current: string

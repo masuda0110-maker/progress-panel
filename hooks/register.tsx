@@ -158,6 +158,66 @@ async function sharedDir($: EngineInterface): Promise<string | undefined> {
   return home ? `${home}/.claude/progress-panel/sessions` : undefined
 }
 
+/** デスクトップアプリがチャットごとの情報（サイドバーの名前など）を置く場所 */
+const APP_SESSIONS = 'Library/Application Support/Claude/claude-code-sessions'
+
+// このチャットの名前と、その情報ファイルの場所（再読み込みのたびに探し直す）
+let chatName = ''
+let chatFile: string | undefined
+
+function titleIn(text: string, id: string): string | undefined {
+  if (!text.includes(id)) return undefined
+  const meta = JSON.parse(text) as { cliSessionId?: unknown; lastAssistantCliSessionId?: unknown; title?: unknown }
+  if (meta.cliSessionId !== id && meta.lastAssistantCliSessionId !== id) return undefined
+
+  return typeof meta.title === 'string' ? meta.title : ''
+}
+
+/** サイドバーのチャット名を、アプリの情報ファイルから読み直す */
+async function refreshChatName($: EngineInterface): Promise<void> {
+  try {
+    const [home, id] = await Promise.all([$.env.get('HOME'), $.session.id()])
+    if (!home) return
+
+    if (chatFile) {
+      const title = titleIn(String(await $.fs.read(chatFile)), id)
+      if (title !== undefined) {
+        chatName = title
+        return
+      }
+      chatFile = undefined
+    }
+
+    const root = `${home}/${APP_SESSIONS}`
+    if (!(await $.fs.exists(root))) return
+    const candidates: { path: string; mtimeMs: number }[] = []
+    for (const account of await $.fs.list(root)) {
+      if (account.kind !== 'dir') continue
+      for (const org of await $.fs.list(`${root}/${account.name}`)) {
+        if (org.kind !== 'dir') continue
+        const dir = `${root}/${account.name}/${org.name}`
+        for (const file of await $.fs.list(dir)) {
+          if (file.kind === 'file' && file.name.startsWith('local_') && file.name.endsWith('.json')) {
+            candidates.push({ path: `${dir}/${file.name}`, mtimeMs: file.mtimeMs })
+          }
+        }
+      }
+    }
+    // 今動いているチャットの情報ファイルは、たいてい最近更新されたもの
+    candidates.sort((a, b) => b.mtimeMs - a.mtimeMs)
+    for (const one of candidates) {
+      const title = titleIn(String(await $.fs.read(one.path).catch(() => '')), id)
+      if (title !== undefined) {
+        chatFile = one.path
+        chatName = title
+        return
+      }
+    }
+  } catch {
+    // 読めないときは、最初の依頼を見出しに使う
+  }
+}
+
 function projectName(cwd: string): string {
   if (cwd.includes('/scratch-workspaces/')) return 'フォルダなし'
 
@@ -169,6 +229,7 @@ function isSummary(value: unknown): value is SessionSummary {
   return (
     !!v &&
     typeof v.id === 'string' &&
+    (v.chatName === undefined || typeof v.chatName === 'string') &&
     typeof v.project === 'string' &&
     typeof v.done === 'number' &&
     typeof v.total === 'number' &&
@@ -188,6 +249,7 @@ async function publish($: EngineInterface): Promise<void> {
   ])
   const summary: SessionSummary = {
     id,
+    chatName,
     project: projectName(cwd),
     title: state.title,
     current: state.items.find(item => item.status === 'in_progress')?.content ?? '',
@@ -277,6 +339,7 @@ export const register: Register = on => {
     })
     if (e.surface !== 'terminal') void $.ui.open({ id: PANE, title: TITLE })
     const ran = await next(e)
+    await refreshChatName($)
 
     const current = await read($, progress)
     if (current.items.length === 0 && current.recap === '' && current.nextAction === '') {
@@ -337,6 +400,7 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     if (!e.agentId) {
+      await refreshChatName($)
       await commit($, state => ({
         ...state,
         isWorking: false,
@@ -371,14 +435,16 @@ export const register: Register = on => {
             const { mark, label, color } = statusOf(one)
             const filled = filledOf(one.done, one.total)
             const isSelf = one.id === all.selfId
-            const detail = [one.current || one.title, isSelf ? 'このチャット' : ago(now - one.updatedAt)]
+            const name = one.chatName || one.title || one.project
+            const place = one.project === 'フォルダなし' || one.project === name ? '' : one.project
+            const detail = [one.current, place, isSelf ? 'このチャット' : ago(now - one.updatedAt)]
               .filter(Boolean)
               .join(' · ')
 
             return (
               <Box flexDirection="column">
                 <Text bold={isSelf}>
-                  {mark} {one.project} <Text color={color}>{label}</Text>
+                  {mark} {name} <Text color={color}>{label}</Text>
                 </Text>
                 <Text>
                   {'   '}

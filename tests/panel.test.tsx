@@ -20,10 +20,16 @@ const PANE = {
 } as const
 
 /** 共有フォルダを含む、エンジン側の振る舞いの代わり */
-function engine(on: any, options: { messages?: unknown[]; files?: Record<string, unknown>; failWrite?: boolean } = {}) {
-  const files = new Map<string, string>(
-    Object.entries(options.files ?? {}).map(([name, value]) => [`${DIR}/${name}`, JSON.stringify(value)]),
-  )
+const APP = '/home/me/Library/Application Support/Claude/claude-code-sessions/acct/org'
+
+function engine(
+  on: any,
+  options: { messages?: unknown[]; files?: Record<string, unknown>; app?: Record<string, unknown>; failWrite?: boolean } = {},
+) {
+  const files = new Map<string, string>([
+    ...Object.entries(options.files ?? {}).map(([name, value]): [string, string] => [`${DIR}/${name}`, JSON.stringify(value)]),
+    ...Object.entries(options.app ?? {}).map(([name, value]): [string, string] => [`${APP}/${name}`, JSON.stringify(value)]),
+  ])
   on('command.register', () => ({ value: { command: 'progress-panel' } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
@@ -32,22 +38,30 @@ function engine(on: any, options: { messages?: unknown[]; files?: Record<string,
   on('session.cwd', () => ({ value: '/Users/me/projects/shop-site' }))
   on('clock.now', () => ({ value: NOW }))
   on('env.get', () => ({ value: '/home/me' }))
-  on('fs.exists', () => ({ value: true }))
+  on('fs.exists', (_: unknown, e: { path: string }) => ({
+    value: [...files.keys()].some(key => key === e.path || key.startsWith(`${e.path}/`)),
+  }))
   on('fs.write', (_: unknown, e: { path: string; text: string }) => {
     if (options.failWrite) throw new Error('EACCES')
     files.set(e.path, e.text)
     return { value: undefined }
   })
-  on('fs.read', (_: unknown, e: { path: string }) => ({ value: files.get(e.path) ?? '' }))
-  on('fs.list', () => ({
-    value: [...files.keys()].map(path => ({
-      name: path.slice(DIR.length + 1),
-      kind: 'file',
-      size: 1,
-      mtimeMs: NOW,
-      isLink: false,
-    })),
-  }))
+  on('fs.read', (_: unknown, e: { path: string }) => {
+    const text = files.get(e.path)
+    if (text === undefined) throw new Error('ENOENT')
+    return { value: text }
+  })
+  on('fs.list', (_: unknown, e: { path: string }) => {
+    const children = new Map<string, 'file' | 'dir'>()
+    for (const key of files.keys()) {
+      if (!key.startsWith(`${e.path}/`)) continue
+      const [head = '', ...more] = key.slice(e.path.length + 1).split('/')
+      children.set(head, more.length > 0 ? 'dir' : 'file')
+    }
+    return {
+      value: [...children].map(([name, kind]) => ({ name, kind, size: 1, mtimeMs: NOW, isLink: false })),
+    }
+  })
   on('tool.call', () => ({ result: {} }))
   on('turn.start', (_: unknown, e: { turnId: string }) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
@@ -99,8 +113,8 @@ test('全プロジェクトの進捗を一覧にする', async ($, on) => {
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
-    expect((await ui.find({ type: 'Text', text: /🔧 shop-site 0\/2/ }))?.text).toBeTruthy()
-    expect((await ui.find({ type: 'Text', text: /調べる · このチャット/ }))?.text).toBeTruthy()
+    expect((await ui.find({ type: 'Text', text: /🔧 商品一覧の表示を直して 0\/2/ }))?.text).toBeTruthy()
+    expect((await ui.find({ type: 'Text', text: /調べる · shop-site · このチャット/ }))?.text).toBeTruthy()
     expect((await ui.find({ type: 'Text', text: /✅ mail-tool 完了/ }))?.text).toBeTruthy()
     expect((await ui.find({ type: 'Text', text: /⏸ dashboard 3\/10/ }))?.text).toBeTruthy()
     expect((await ui.find({ type: 'Text', text: /███░░░░░░░ グラフ修正 · 2時間前/ }))?.text).toBeTruthy()
@@ -114,6 +128,27 @@ test('全プロジェクトの進捗を一覧にする', async ($, on) => {
     expect((await ui.find({ type: 'Text', text: /^███$/ }))?.props.color).toBe('warning')
     await ui.unmount()
   }
+})
+
+test('見出しはサイドバーのチャット名にする', async ($, on) => {
+  const files = engine(on, {
+    files: { 'b.json': summary('b', 'dashboard', 3, 10, { chatName: 'グラフの色を直す', current: '色の変更' }) },
+    app: {
+      'local_other.json': { cliSessionId: 'someone-else', title: '別のチャット' },
+      'local_mine.json': { cliSessionId: 'self', title: 'Mods活用' },
+    },
+  })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: PLAN, items: STEPS })
+
+  expect(JSON.parse(files.get(`${DIR}/self.json`) ?? '{}').chatName).toBe('Mods活用')
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await ui.find({ type: 'Text', text: /⏸ Mods活用 0\/2/ }))?.text).toBeTruthy()
+  expect((await ui.find({ type: 'Text', text: /⏸ グラフの色を直す 3\/10/ }))?.text).toBeTruthy()
+  // フォルダ名は2行目に回る
+  expect((await ui.find({ type: 'Text', text: /色の変更 · dashboard · 2時間前/ }))?.text).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /別のチャット/ })).toBeFalsy()
+  await ui.unmount()
 })
 
 test('done と start で順番を飛ばせる', async ($, on) => {
