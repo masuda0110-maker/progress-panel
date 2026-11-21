@@ -9,7 +9,7 @@ const PLAN_TOOL = 'mcp__ccd_turn__update_plan'
 const WRAP_UP_TOOL = 'mcp__ccd_turn__wrap_up'
 
 /** 一覧に出すのは、この期間内に動いたチャットだけ */
-const RECENT_MS = 3 * 24 * 60 * 60 * 1000
+const RECENT_MS = 7 * 24 * 60 * 60 * 1000
 const REFRESH_MS = 15 * 1000
 const MAX_ROWS = 10
 
@@ -366,7 +366,7 @@ export const register: Register = on => {
 
         <Box flexDirection="column" marginTop={1}>
           <Text bold>全体の進捗</Text>
-          {all.sessions.length === 0 && <Text dimColor>ここ3日のチャットはまだありません</Text>}
+          {all.sessions.length === 0 && <Text dimColor>ここ1週間に動いたチャットはありません</Text>}
           {all.sessions.map(one => {
             const { mark, label, color } = statusOf(one)
             const filled = filledOf(one.done, one.total)

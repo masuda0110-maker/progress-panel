@@ -83,7 +83,8 @@ test('全プロジェクトの進捗を一覧にする', async ($, on) => {
     files: {
       'a.json': summary('a', 'mail-tool', 4, 4),
       'b.json': summary('b', 'dashboard', 3, 10, { current: 'グラフ修正' }),
-      'old.json': summary('old', 'old-project', 1, 2, { updatedAt: NOW - 10 * 86400_000 }),
+      'old.json': summary('old', 'old-project', 1, 2, { updatedAt: NOW - 8 * 86400_000 }),
+      'week.json': summary('week', 'week-project', 1, 2, { updatedAt: NOW - 6 * 86400_000 }),
       'broken.json': { nope: true },
     },
   })
@@ -103,6 +104,8 @@ test('全プロジェクトの進捗を一覧にする', async ($, on) => {
     expect((await ui.find({ type: 'Text', text: /✅ mail-tool 完了/ }))?.text).toBeTruthy()
     expect((await ui.find({ type: 'Text', text: /⏸ dashboard 3\/10/ }))?.text).toBeTruthy()
     expect((await ui.find({ type: 'Text', text: /███░░░░░░░ グラフ修正 · 2時間前/ }))?.text).toBeTruthy()
+    // 1週間以内に動いたものだけ：6日前は出て、8日前は出ない
+    expect((await ui.find({ type: 'Text', text: /week-project/ }))?.text).toBeTruthy()
     expect(await ui.find({ type: 'Text', text: /old-project/ })).toBeFalsy()
     // 状態ごとの色：完了は緑、作業中は青、途中で止まっているものは黄
     expect((await ui.find({ type: 'Text', text: /^完了$/ }))?.props.color).toBe('success')
