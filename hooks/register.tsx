@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Color, EngineInterface, Register } from 'claude-code'
 
-import type { Overview, PlanItem, PlanStatus, Progress, SessionSummary } from '../types'
+import type { Overview, PlanItem, PlanStatus, Progress, SessionSummary, View } from '../types'
 
 const PANE = 'progress-panel'
 const TITLE = '進捗'
@@ -22,14 +22,20 @@ const EMPTY: Progress = {
   title: '',
 }
 
-const EMPTY_OVERVIEW: Overview = { sessions: [], selfId: '', now: 0 }
+const EMPTY_OVERVIEW: Overview = { sessions: [], archived: [], selfId: '', now: 0 }
+
+const EMPTY_VIEW: View = { showArchived: false }
 
 const progress = atom({ plugin: 'progress-panel', key: 'progress' } as const, EMPTY, {
   shape: 'progress-3',
 })
 
 const overview = atom({ plugin: 'progress-panel', key: 'overview' } as const, EMPTY_OVERVIEW, {
-  shape: 'overview-1',
+  shape: 'overview-2',
+})
+
+const view = atom({ plugin: 'progress-panel', key: 'view' } as const, EMPTY_VIEW, {
+  shape: 'view-1',
 })
 
 const MARK: Record<PlanStatus, string> = {
@@ -158,6 +164,33 @@ async function sharedDir($: EngineInterface): Promise<string | undefined> {
   return home ? `${home}/.claude/progress-panel/sessions` : undefined
 }
 
+/** 手動でアーカイブしたチャットの一覧（全チャット共通） */
+async function archiveFile($: EngineInterface): Promise<string | undefined> {
+  const home = await $.env.get('HOME')
+
+  return home ? `${home}/.claude/progress-panel/archived.json` : undefined
+}
+
+async function readArchived($: EngineInterface): Promise<string[]> {
+  const file = await archiveFile($)
+  if (!file || !(await $.fs.exists(file))) return []
+  try {
+    const { ids } = JSON.parse(String(await $.fs.read(file))) as { ids?: unknown }
+    return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+/** チャットをアーカイブする、または元に戻す */
+async function setArchived($: EngineInterface, id: string, isArchived: boolean): Promise<void> {
+  const file = await archiveFile($)
+  if (!file) return
+  const ids = (await readArchived($)).filter(one => one !== id)
+  await $.fs.write(file, JSON.stringify({ ids: isArchived ? [...ids, id] : ids }))
+  await collect($)
+}
+
 /** デスクトップアプリがチャットごとの情報（サイドバーの名前など）を置く場所 */
 const APP_SESSIONS = 'Library/Application Support/Claude/claude-code-sessions'
 
@@ -278,18 +311,24 @@ async function collect($: EngineInterface): Promise<void> {
         .catch(() => undefined),
     ),
   )
-  const sessions = read_
+  const archivedIds = new Set(await readArchived($))
+  const recent = read_
     .filter(isSummary)
     .filter(one => now - one.updatedAt < RECENT_MS)
     .sort((a, b) => Number(b.isWorking) - Number(a.isWorking) || b.updatedAt - a.updatedAt)
-    .slice(0, MAX_ROWS)
+  const sessions = recent.filter(one => !archivedIds.has(one.id)).slice(0, MAX_ROWS)
+  const archived = recent.filter(one => archivedIds.has(one.id))
 
   await update($, overview, old => {
-    const same = old && old.selfId === selfId && JSON.stringify(old.sessions) === JSON.stringify(sessions)
+    const same =
+      old &&
+      old.selfId === selfId &&
+      JSON.stringify(old.sessions) === JSON.stringify(sessions) &&
+      JSON.stringify(old.archived) === JSON.stringify(archived)
     // 中身が変わらないときも「◯分前」を進めるため、1分ごとには描き直す
     if (same && now - old.now < 60 * 1000) return old
 
-    return { sessions, selfId, now }
+    return { sessions, archived, selfId, now }
   })
 }
 
@@ -412,10 +451,16 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Markdown } = $.ui.resolve(e)
-    const [state, all] = await Promise.all([read($, progress), read($, overview)])
+    const { Box, Text, Markdown, Button } = $.ui.resolve(e)
+    const [state, all, shown] = await Promise.all([read($, progress), read($, overview), read($, view)])
     const doneCount = state.items.filter(item => item.status === 'completed').length
     const now = all.now
+    const archive = (id: string, isArchived: boolean) => () => {
+      void setArchived($, id, isArchived).catch(() => $.ui.toast('アーカイブの保存に失敗しました'))
+    }
+    const toggleArchived = () => {
+      void update($, view, old => ({ showArchived: !(old ?? EMPTY_VIEW).showArchived }))
+    }
 
     return (
       <Box flexDirection="column">
@@ -443,9 +488,14 @@ export const register: Register = on => {
 
             return (
               <Box flexDirection="column">
-                <Text bold={isSelf}>
-                  {mark} {name} <Text color={color}>{label}</Text>
-                </Text>
+                <Box flexDirection="row" justifyContent="space-between">
+                  <Text bold={isSelf}>
+                    {mark} {name} <Text color={color}>{label}</Text>
+                  </Text>
+                  <Button key={`archive-${one.id}`} plain dimColor onPress={archive(one.id, true)}>
+                    アーカイブ
+                  </Button>
+                </Box>
                 <Text>
                   {'   '}
                   <Text color={color}>{'█'.repeat(filled)}</Text>
@@ -456,6 +506,26 @@ export const register: Register = on => {
             )
           })}
         </Box>
+
+        {all.archived.length > 0 && (
+          <Box flexDirection="column" marginTop={1}>
+            <Button key="toggle-archived" plain dimColor onPress={toggleArchived}>
+              {shown.showArchived ? '▾' : '▸'} アーカイブ済み {all.archived.length}件
+            </Button>
+            {shown.showArchived &&
+              all.archived.map(one => (
+                <Box flexDirection="row" justifyContent="space-between">
+                  <Text dimColor>
+                    {'   '}
+                    {one.chatName || one.title || one.project} {statusOf(one).label}
+                  </Text>
+                  <Button key={`restore-${one.id}`} plain dimColor onPress={archive(one.id, false)}>
+                    元に戻す
+                  </Button>
+                </Box>
+              ))}
+          </Box>
+        )}
 
         <Box flexDirection="column" marginTop={1}>
           <Text bold>

@@ -26,13 +26,22 @@ export type SessionSummary = {
   updatedAt: number
 }
 
-export type Overview = { sessions: SessionSummary[]; selfId: string; now: number }
+export type Overview = {
+  sessions: SessionSummary[]
+  /** 手動でアーカイブした（一覧から外した）チャット */
+  archived: SessionSummary[]
+  selfId: string
+  now: number
+}
+
+export type View = { showArchived: boolean }
 
 declare module 'claude-code' {
   interface PluginState {
     'progress-panel': {
       progress: Shaped<Progress>
       overview: Shaped<Overview>
+      view: Shaped<View>
     }
   }
 }

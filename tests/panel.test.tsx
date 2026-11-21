@@ -151,6 +151,37 @@ test('見出しはサイドバーのチャット名にする', async ($, on) => 
   await ui.unmount()
 })
 
+test('手動でアーカイブして一覧から外し、元に戻せる', async ($, on) => {
+  const files = engine(on, {
+    files: {
+      'a.json': summary('a', 'mail-tool', 4, 4),
+      'b.json': summary('b', 'dashboard', 3, 10),
+    },
+  })
+  await $.tool.call({ tool: PLAN, items: STEPS })
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect((await ui.find({ type: 'Text', text: /dashboard 3\/10/ }))?.text).toBeTruthy()
+
+    await ui.press({ key: 'archive-b' })
+    expect(JSON.parse(files.get('/home/me/.claude/progress-panel/archived.json') ?? '{}').ids).toEqual(['b'])
+    expect(await ui.find({ type: 'Text', text: /⏸ dashboard 3\/10/ })).toBeFalsy()
+    expect((await ui.find({ type: 'Text', text: /mail-tool 完了/ }))?.text).toBeTruthy()
+    expect(await ui.find({ type: 'Button', key: 'toggle-archived' })).toBeTruthy()
+
+    // 開くと、元に戻すボタンが出る（開閉の状態は前の画面から引き継ぐ）
+    if (!(await ui.find({ type: 'Button', key: 'restore-b' }))) await ui.press({ key: 'toggle-archived' })
+    expect(await ui.find({ type: 'Button', key: 'restore-b' })).toBeTruthy()
+
+    await ui.press({ key: 'restore-b' })
+    expect(JSON.parse(files.get('/home/me/.claude/progress-panel/archived.json') ?? '{}').ids).toEqual([])
+    expect((await ui.find({ type: 'Text', text: /dashboard 3\/10/ }))?.text).toBeTruthy()
+    expect(await ui.find({ type: 'Button', key: 'toggle-archived' })).toBeFalsy()
+    await ui.unmount()
+  }
+})
+
 test('done と start で順番を飛ばせる', async ($, on) => {
   engine(on)
   await $.tool.call({ tool: PLAN, items: [...STEPS, { content: '試す', status: 'pending' }] })
